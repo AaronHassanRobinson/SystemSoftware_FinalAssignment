@@ -36,9 +36,9 @@ void *writer(void *arg)
         if (bufferOverflowFlag == 0)
         {
             scanf("%c", &ch);
+            pthread_mutex_lock(&write_mutex);
+            pthread_mutex_lock(&read_mutex);
         }
-        pthread_mutex_lock(&write_mutex);
-        pthread_mutex_lock(&read_mutex);
         if (ch != '\n')
         {
             if (bufferIndex >= bufferSize)
