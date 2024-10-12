@@ -30,51 +30,53 @@ pthread_mutex_t write_lock;
 
 void *writer(void *arg)
 {
+    char ch;
     for (;;)
     {
-        char ch;
-        if (bufferOverflowFlag == 0)
+
+        if (!bufferOverflowFlag)
         {
+            pthread_mutex_lock(&read_lock);
+            pthread_mutex_lock(&write_lock);        // write lock not really necessary, as only one writer
             scanf("%c", &ch);
-            pthread_mutex_lock(&write_mutex);
-            pthread_mutex_lock(&read_mutex);
-        }
-        if (ch != '\n')
-        {
-            if (bufferIndex >= bufferSize)
+
+            if (ch != '\n') // check if input is from return char
             {
-                printf("buffer overflow! must wait for reader to consume a char.\n");
-                bufferOverflowFlag = 1;
-                pthread_mutex_unlock(&write_mutex);
-                pthread_mutex_unlock(&read_mutex);
-            }
-            else
-            {
-                bufferOverflowFlag = 0;
-                bufferIndex++;
                 buffer[bufferIndex] = ch;
+                bufferIndex++;
+                // here we can detect if buffer overflow will happen next cycle:
+                if (bufferIndex == bufferSize - 1)
+                {
+                    bufferOverflowFlag = 1;
+                    printf("buffer full! must wait for reader to consume a char before continuing.\n");
+                }
             }
+            pthread_mutex_unlock(&write_lock);
+            pthread_mutex_unlock(&read_lock);
+            usleep(1);
         }
-        pthread_mutex_unlock(&read_mutex);
-        pthread_mutex_unlock(&write_mutex);
     }
+
     return 0;
 }
 void *reader(void *arg)
 {
+    // maybe create local copies ? 
     for (;;)
     {
-        if (buffer[bufferIndex] != '0')
+        pthread_mutex_lock(&read_lock);
+        if (buffer[bufferIndex-1] != '0' && bufferIndex != 0)
         {
-            pthread_mutex_lock(&read_mutex);
-            printf("character entered: %c. | ", buffer[bufferIndex]);
+            printf("character entered: %c. | ", buffer[bufferIndex -1]);
+            printf("buffer: %s\n", buffer);
             printf("%lu remaining spots in buffer.\n", bufferSize - bufferIndex);
-            pthread_mutex_unlock(&read_mutex);
-            pthread_mutex_lock(&write_mutex);
-            buffer[bufferIndex] = '0';
             bufferIndex--;
-            pthread_mutex_unlock(&write_mutex);
+            buffer[bufferIndex] = '0';
+            bufferOverflowFlag = 0;
         }
+        pthread_mutex_unlock(&read_lock);
+        usleep(1);
+
     }
 
     return 0;
@@ -84,7 +86,6 @@ int main(void)
     printf("Read write program\n");
     memset(buffer, '0', sizeof(buffer));
     printf("buffer reset: %s.\n", buffer);
-
 
     // the following changes terminal settings to automatically enter a character without pressing return.
     // ----------------------------------------------------------------
@@ -102,17 +103,17 @@ int main(void)
     // TCSANOW tells tcsetattr to change attributes immediately. */
     // tcsetattr(STDIN_FILENO, TCSANOW, &newt);
     // ----------------------------------------------------------------
-    
+
     // Initialize  mutex variables
     if (pthread_mutex_init(&read_lock, NULL) != 0)
     {
-        printf("\n read mutex init has failed\n");
+        printf("\n read lock init has failed\n");
         return 1;
     }
 
     if (pthread_mutex_init(&write_lock, NULL) != 0)
     {
-        printf("\n Write mutex init has failed\n");
+        printf("\n Write lock init has failed\n");
         return 1;
     }
 
