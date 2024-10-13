@@ -4,9 +4,6 @@
 #include <unistd.h>
 #include <termios.h>
 #include <string.h>
-pthread_mutex_t read_mutex;
-pthread_mutex_t write_mutex;
-
 //----------------------------------------------------------------
 // read write, to shared buffer program.
 // purpose: this program spawns two threads, one for writing to a buffer, and one for reading from the same buffer.
@@ -19,63 +16,70 @@ pthread_mutex_t write_mutex;
 //     2. Removes the character from the buffer.
 //     3. Displays the character that is removed along with the number of remaining characters in the buffer.
 //----------------------------------------------------------------
+
+// Using circular buffer, plus three counters, one for writer to keep track of next available char,
+// one for reader to keep track of the next char to read.
+// one to keep track of the buffer index
+
 #define BUFFER_SIZE 10
 char buffer[BUFFER_SIZE];
-int bufferIndex = 0;
-unsigned long bufferSize = (sizeof(buffer) / sizeof(buffer[bufferIndex]));
-int bufferOverflowFlag = 0;
-
-pthread_mutex_t read_lock;
-pthread_mutex_t write_lock;
+int32_t bufferIndex = 0; // number of characters in the buffer.
+int32_t writeIndex = 0;     // index for the writer thread to keep track of position
+int32_t readIndex = 0;      // index for the reader thread to keep track of position
+uint32_t bufferSize = (sizeof(buffer) / sizeof(buffer[writeIndex]));
+pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+// signals for the threads can communicate if the buffer is full or empty, taking them out of wait state.
+pthread_cond_t NOT_FULL_SIGNAL = PTHREAD_COND_INITIALIZER;
+pthread_cond_t NOT_EMPTY_SIGNAL = PTHREAD_COND_INITIALIZER;
 
 void *writer(void *arg)
 {
     char ch;
     for (;;)
     {
+        //printf("Enter a char: \n");
+        scanf("%c", &ch);
 
-        if (!bufferOverflowFlag)
+        if (ch != '\n' && ch != '\t') // check if input is a new line or return char.
         {
-            pthread_mutex_lock(&read_lock);
-            pthread_mutex_lock(&write_lock);        // write lock not really necessary, as only one writer
-            scanf("%c", &ch);
+            pthread_mutex_lock(&lock);
 
-            if (ch != '\n') // check if input is from return char
+            // if the buffer is full, wait for space to free up.
+            while (bufferIndex == BUFFER_SIZE)
             {
-                buffer[bufferIndex] = ch;
-                bufferIndex++;
-                // here we can detect if buffer overflow will happen next cycle:
-                if (bufferIndex == bufferSize - 1)
-                {
-                    bufferOverflowFlag = 1;
-                    printf("buffer full! must wait for reader to consume a char before continuing.\n");
-                }
+                pthread_cond_wait(&NOT_FULL_SIGNAL, &lock);
             }
-            pthread_mutex_unlock(&write_lock);
-            pthread_mutex_unlock(&read_lock);
-            usleep(1);
+
+            buffer[writeIndex] = ch;
+            writeIndex = (writeIndex + 1) % BUFFER_SIZE;
+            bufferIndex++;
+            pthread_cond_signal(&NOT_EMPTY_SIGNAL); // Signal reader that buffer is not empty
+            pthread_mutex_unlock(&lock);
         }
     }
-
-    return 0;
 }
+
 void *reader(void *arg)
 {
-    // maybe create local copies ? 
+    char readChar;
     for (;;)
     {
-        pthread_mutex_lock(&read_lock);
-        if (buffer[bufferIndex-1] != '0' && bufferIndex != 0)
+        pthread_mutex_lock(&lock); 
+
+        // Wait if buffer is empty
+        while (bufferIndex == 0)
         {
-            printf("character entered: %c. | ", buffer[bufferIndex -1]);
-            printf("buffer: %s\n", buffer);
-            printf("%lu remaining spots in buffer.\n", bufferSize - bufferIndex);
-            bufferIndex--;
-            buffer[bufferIndex] = '0';
-            bufferOverflowFlag = 0;
+            pthread_cond_wait(&NOT_EMPTY_SIGNAL, &lock);
         }
-        pthread_mutex_unlock(&read_lock);
-        usleep(1);
+
+        readChar = buffer[readIndex];
+        readIndex = (readIndex + 1) % BUFFER_SIZE;
+        printf("character entered:    |%c|  ", readChar);
+        printf("buffer: |%s| \n", buffer);
+        printf("Remaining characters: |%d|\n", BUFFER_SIZE-bufferIndex);
+        bufferIndex--;
+        pthread_cond_signal(&NOT_FULL_SIGNAL); // Signal writer that buffer is not full
+        pthread_mutex_unlock(&lock);
 
     }
 
@@ -86,6 +90,7 @@ int main(void)
     printf("Read write program\n");
     memset(buffer, '0', sizeof(buffer));
     printf("buffer reset: %s.\n", buffer);
+    printf("Enter some characters!\n");
 
     // the following changes terminal settings to automatically enter a character without pressing return.
     // ----------------------------------------------------------------
@@ -103,19 +108,6 @@ int main(void)
     // TCSANOW tells tcsetattr to change attributes immediately. */
     // tcsetattr(STDIN_FILENO, TCSANOW, &newt);
     // ----------------------------------------------------------------
-
-    // Initialize  mutex variables
-    if (pthread_mutex_init(&read_lock, NULL) != 0)
-    {
-        printf("\n read lock init has failed\n");
-        return 1;
-    }
-
-    if (pthread_mutex_init(&write_lock, NULL) != 0)
-    {
-        printf("\n Write lock init has failed\n");
-        return 1;
-    }
 
     pthread_t thread_id_write, thread_id_read;
     if (pthread_create(&thread_id_write, NULL, &writer, NULL))
